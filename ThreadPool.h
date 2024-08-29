@@ -11,7 +11,6 @@
 #include <initializer_list>
 #include <unordered_map>
 
-
 #define MIN_THREADS 4
 #define MAX_THREADS 40
 #define DEFAULT_THREADS 4
@@ -34,7 +33,7 @@ public:
 template <typename T>
 class SafeQueue {
 private:
-    std::priority_queue<T, std::vector<T>, std::less<>> m_queue;
+    std::priority_queue<T, std::vector<T>, std::less<T>> m_queue;
     std::mutex m_mutex;
 
 public:
@@ -71,6 +70,7 @@ public:
     }
 };
 
+// 模式：在关闭线程池的时候，确保能够运行完所有的工作线程任务
 class ThreadPool {
 private:
     class ThreadWorker {
@@ -83,11 +83,11 @@ private:
         void operator()() {
             Task t;
             bool dequeued;
-            while (!m_pool->m_shutdown) {
+            while (true) {
                 {
                     std::unique_lock<std::mutex> lock(m_pool->m_conditional_mutex);
                     m_pool->m_conditional_lock.wait(lock, [this] { return !m_pool->m_queue.empty() || m_pool->m_shutdown; });
-                    if (m_pool->m_shutdown) break;
+                    if (m_pool->m_shutdown && m_pool->m_queue.empty()) break;
                     dequeued = m_pool->m_queue.dequeue(t);
                 }
                 if (dequeued)
@@ -150,16 +150,21 @@ public:
         }
     }
 
-    void shutdown() {
-        m_shutdown = true;
-        m_conditional_lock.notify_all();
-        if (timer_thread.joinable()) {
-            timer_thread.join();
+    void shutdown() 
+    {
+        {
+            std::unique_lock<std::mutex> lock(m_conditional_mutex);
+            m_shutdown = true;
         }
+
+        m_conditional_lock.notify_all();
         for (auto& it : lst_threads) {
             if (it.joinable()) {
                 it.join();
             }
+        }
+        if (timer_thread.joinable()) {
+            timer_thread.join();
         }
     }
 
@@ -182,8 +187,8 @@ private:
     void resizePool();
     void timer_function() {
         while (!m_shutdown) {
-            std::this_thread::sleep_for(timer_interval);  // 定时器间隔
-            resizePool();  // 调整线程池大小
+            std::this_thread::sleep_for(timer_interval);
+            resizePool();
         }
     }
 };
@@ -221,5 +226,3 @@ void ThreadPool::resizePool()
         return;
     }
 }
-
-
